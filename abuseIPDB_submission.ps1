@@ -279,10 +279,12 @@ function Submit-IPFromEML {
             $receivedFromHeader = Select-FromDuplicates -HeaderName "Received: from (après Authentication-Results)" -Headers $receivedFromHeaders
         }
     }
-
     # Extraction de l'IP depuis Authentication-Results
     $ipFromAuth = $null
     if ($authResultsHeader -match "sender IP is ([0-9.]+)") {
+        $ipFromAuth = $Matches[1]
+    }
+    elseif ($authResultsHeader -match "\(sender IP is ([0-9.]+)\)") {
         $ipFromAuth = $Matches[1]
     }
 
