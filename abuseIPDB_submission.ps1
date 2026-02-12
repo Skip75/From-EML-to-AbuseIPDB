@@ -379,8 +379,13 @@ function Submit-IPFromEML {
 
 
     if (-not (Test-IPv4 -IP $finalIP)) {
-        Write-Host "`nErreur : L'IP extraite n'est pas valide : $finalIP" -ForegroundColor Red
-        Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
+        Write-Host "`nErreur : L'IP extraite n'est pas valide : '$finalIP'" -ForegroundColor Red
+        Write-Host "Format attendu : X.X.X.X (où X = 0-255)" -ForegroundColor Yellow
+        Write-Host "`nCauses possibles :" -ForegroundColor Cyan
+        Write-Host "  - IP non trouvée dans les headers" -ForegroundColor Gray
+        Write-Host "  - Format IPv6 (non supporté actuellement)" -ForegroundColor Gray
+        Write-Host "  - Headers malformés" -ForegroundColor Gray
+        Write-Host "`nAppuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         return
     }
