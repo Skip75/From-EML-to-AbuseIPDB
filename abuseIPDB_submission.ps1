@@ -595,13 +595,45 @@ function Submit-IPFromEML {
         $comment = $comment.Substring(0, 1024)
     }
     
-    # Extraction de la date depuis le PREMIER Received: from (plus proche du sender)
+    # Extraction de la date depuis TOUS les Received: from (pas seulement après Auth-Results) et garder la plus ancienne
     $timestamp = $null
-    if ($receivedFromHeaders.Count -gt 0) {
-        $firstReceivedHeader = $receivedFromHeaders[0]  # Premier = plus proche du sender
-        if ($firstReceivedHeader -match ";\\s*(.+)$") {
-            $dateString = $Matches[1].Trim()
-            $timestamp = Convert-ToISO8601 -DateString $dateString
+    
+    # Extraire TOUS les Received: from du fichier (pas seulement après Authentication-Results)
+    $allReceivedFromHeaders = @($normalizedHeaders | Where-Object { $_ -match "^Received: from" })
+    
+    if ($allReceivedFromHeaders.Count -gt 0) {
+        $allDates = @()
+        
+        Write-Host "`nExtraction des timestamps de tous les 'Received: from' ($($allReceivedFromHeaders.Count) trouvés)..." -ForegroundColor Cyan
+        
+        foreach ($receivedHeader in $allReceivedFromHeaders) {
+            # Chercher le dernier point-virgule (celui avant la date)
+            $semicolonIndex = $receivedHeader.LastIndexOf(';')
+            
+            if ($semicolonIndex -ge 0) {
+                $dateString = $receivedHeader.Substring($semicolonIndex + 1).Trim()
+                
+                try {
+                    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+                    $parsedDate = [DateTime]::Parse($dateString, $culture, [System.Globalization.DateTimeStyles]::AssumeUniversal)
+                    $utcDate = $parsedDate.ToUniversalTime()
+                    $allDates += $utcDate
+                    Write-Host "  - Date trouvée : $dateString → $($utcDate.ToString('yyyy-MM-dd HH:mm:ss')) UTC" -ForegroundColor Gray
+                }
+                catch {
+                    Write-Host "  - Impossible de parser : $dateString" -ForegroundColor Yellow
+                }
+            }
+        }
+        
+        if ($allDates.Count -gt 0) {
+            # Garder la date la plus ancienne (Min)
+            $oldestDate = ($allDates | Measure-Object -Minimum).Minimum
+            $timestamp = $oldestDate.ToString("yyyy-MM-ddTHH:mm:ssZ")
+            Write-Host "`n✓ Timestamp le plus ancien sélectionné : $timestamp" -ForegroundColor Green
+        }
+        else {
+            Write-Host "`n⚠️ Aucune date n'a pu être extraite des Received: from" -ForegroundColor Yellow
         }
     }
 
@@ -618,13 +650,7 @@ function Submit-IPFromEML {
         Write-Host "Timestamp : [heure actuelle sera utilisée]" -ForegroundColor Yellow
     }
     Write-Host "`nCommentaire ($($comment.Length) caractères, max 1024) :" -ForegroundColor White
-    if ($comment.Length -gt 500) {
-        Write-Host $comment.Substring(0, 500) -ForegroundColor Gray
-        Write-Host "... [affichage tronqué pour lisibilité]" -ForegroundColor DarkGray
-    }
-    else {
-        Write-Host $comment -ForegroundColor Gray
-    }
+    Write-Host $comment -ForegroundColor Gray
     Write-Host "=============================================" -ForegroundColor Cyan
 
     # Validation
