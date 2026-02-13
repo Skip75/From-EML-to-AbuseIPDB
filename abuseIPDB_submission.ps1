@@ -108,6 +108,56 @@ function Extract-AuthDomain {
     return $null
 }
 
+# ─── Fonction pour décoder les headers MIME encoded-word (RFC 2047) ─────────
+function Decode-MimeHeader {
+    param([string]$EncodedText)
+    
+    if ([string]::IsNullOrWhiteSpace($EncodedText)) {
+        return $EncodedText
+    }
+    
+    # Regex pour matcher =?charset?encoding?encoded-text?=
+    $pattern = '=\?([^?]+)\?([BQbq])\?([^?]+)\?='
+    
+    $decodedText = $EncodedText
+    $matches = [regex]::Matches($EncodedText, $pattern)
+    
+    foreach ($match in $matches) {
+        $charset = $match.Groups[1].Value
+        $encoding = $match.Groups[2].Value.ToUpper()
+        $encodedPart = $match.Groups[3].Value
+        
+        try {
+            $decodedPart = ""
+            
+            if ($encoding -eq "B") {
+                # Base64 decoding
+                $bytes = [System.Convert]::FromBase64String($encodedPart)
+                $decodedPart = [System.Text.Encoding]::GetEncoding($charset).GetString($bytes)
+            }
+            elseif ($encoding -eq "Q") {
+                # Quoted-Printable decoding
+                $qpDecoded = $encodedPart -replace '_', ' '
+                $qpDecoded = [regex]::Replace($qpDecoded, '=([0-9A-F]{2})', {
+                    param($m)
+                    [char][Convert]::ToInt32($m.Groups[1].Value, 16)
+                })
+                $decodedPart = $qpDecoded
+            }
+            
+            # Remplacer la partie encodée par la partie décodée
+            $decodedText = $decodedText -replace [regex]::Escape($match.Value), $decodedPart
+        }
+        catch {
+            # En cas d'erreur, laisser le texte original
+            Write-Host "Avertissement : Impossible de décoder '$($match.Value)'" -ForegroundColor Yellow
+        }
+    }
+    
+    return $decodedText
+}
+
+
 # ─── Fonction pour valider une IPv4 ─────────────────────────────────────────
 function Test-IPv4 {
     param([string]$IP)
@@ -131,10 +181,15 @@ function Open-IPStatus {
 # ─── Fonction pour convertir la date du header au format ISO 8601 ──────────
 function Convert-ToISO8601 {
     param([string]$DateString)
-
+    
     try {
-        $parsedDate = [DateTime]::Parse($DateString)
-        return $parsedDate.ToString("yyyy-MM-ddTHH:mm:sszzz")
+        # Utiliser CultureInfo invariante pour parsing correct des dates RFC 2822
+        $culture = [System.Globalization.CultureInfo]::InvariantCulture
+        $parsedDate = [DateTime]::Parse($DateString, $culture, [System.Globalization.DateTimeStyles]::AssumeUniversal)
+        
+        # Convertir en UTC et formater en ISO 8601
+        $utcDate = $parsedDate.ToUniversalTime()
+        return $utcDate.ToString("yyyy-MM-ddTHH:mm:ssZ")
     }
     catch {
         Write-Host "Erreur lors du parsing de la date: $DateString" -ForegroundColor Red
@@ -208,8 +263,8 @@ function Submit-IPFromEML {
     }
 
     # Extraction des headers nécessaires
-    $authResultsHeaders = $normalizedHeaders | Where-Object { $_ -match "^Authentication-Results:" }
-    $receivedSPFHeaders = $normalizedHeaders | Where-Object { $_ -match "^Received-SPF:" }
+    $authResultsHeaders = @($normalizedHeaders | Where-Object { $_ -match "^Authentication-Results:" })
+    $receivedSPFHeaders = @($normalizedHeaders | Where-Object { $_ -match "^Received-SPF:" })
 
     # Pour Received: from, ne prendre que ceux APRÈS Authentication-Results
     $receivedFromHeaders = @()
@@ -221,9 +276,9 @@ function Submit-IPFromEML {
         }
     }
 
-    $receivedByHeaders = $normalizedHeaders | Where-Object { $_ -match "^Received: by" }
-    $subjectHeaders = $normalizedHeaders | Where-Object { $_ -match "^Subject:" }
-    $fromHeaders = $normalizedHeaders | Where-Object { $_ -match "^From:" }
+    $receivedByHeaders = @($normalizedHeaders | Where-Object { $_ -match "^Received: by" })
+    $subjectHeaders = @($normalizedHeaders | Where-Object { $_ -match "^Subject:" })
+    $fromHeaders = @($normalizedHeaders | Where-Object { $_ -match "^From:" })
 
     # Vérification de la présence des headers
     if ($authResultsHeaders.Count -eq 0 -or $receivedSPFHeaders.Count -eq 0 -or $fromHeaders.Count -eq 0) {
@@ -270,41 +325,70 @@ function Submit-IPFromEML {
     # Pour Received: from après Authentication-Results, permettre à l'utilisateur de choisir s'il y en a plusieurs
     $receivedFromHeader = $null
     if ($receivedFromHeaders.Count -gt 0) {
+        # Prendre le PREMIER (plus proche du sender)
+        $receivedFromHeader = $receivedFromHeaders[0]
+        
         if ($receivedFromHeaders.Count -eq 1) {
-            $receivedFromHeader = $receivedFromHeaders[0]
             Write-Host "`nInfo : 1 header 'Received: from' trouvé après Authentication-Results." -ForegroundColor Cyan
         }
         else {
             Write-Host "`nInfo : $($receivedFromHeaders.Count) headers 'Received: from' trouvés après Authentication-Results." -ForegroundColor Cyan
-            $receivedFromHeader = Select-FromDuplicates -HeaderName "Received: from (après Authentication-Results)" -Headers $receivedFromHeaders
+            Write-Host "  → Utilisation du premier (le plus proche du sender malveillant) :" -ForegroundColor Cyan
+            $preview = $receivedFromHeader
+            if ($preview.Length -gt 100) {
+                $preview = $preview.Substring(0, 100) + "..."
+            }
+            Write-Host "     $preview" -ForegroundColor White
         }
     }
-    # Extraction de l'IP depuis Authentication-Results
-    $ipFromAuth = $null
-    if ($authResultsHeader -match "sender IP is ([0-9.]+)") {
-        $ipFromAuth = $Matches[1]
-    }
-    elseif ($authResultsHeader -match "\(sender IP is ([0-9.]+)\)") {
-        $ipFromAuth = $Matches[1]
-    }
 
-    # Extraction de l'IP depuis Received-SPF
+    # Extraction de l'IP depuis Authentication-Results (avec ou sans parenthèses)
+    $ipFromAuth = $null
+    if ($authResultsHeader -match "\(?\s*sender IP is ([0-9.]+)\s*\)?") {
+        $ipFromAuth = $Matches[1]
+    }
+    
+    # Extraction de l'IP depuis Received-SPF (chercher après le point-virgule)
     $ipFromSPF = $null
     if ($receivedSPFHeader -match "client-ip=([0-9.]+)") {
         $ipFromSPF = $Matches[1]
     }
-
-    # Extraction de l'IP depuis Received: from
+    
+    # Extraction de l'IP depuis Received: from (supporte [] et ())
     $ipFromReceived = $null
-    if ($receivedFromHeader -and $receivedFromHeader -match "\[([0-9.]+)\]") {
-        $ipFromReceived = $Matches[1]
+    if ($receivedFromHeader) {
+        # Chercher d'abord entre crochets [IP]
+        if ($receivedFromHeader -match "\[([0-9.]+)\]") {
+            $ipFromReceived = $Matches[1]
+        }
+        # Si pas trouvé, chercher entre parenthèses (IP)
+        elseif ($receivedFromHeader -match "\(([0-9.]+)\)") {
+            $ipFromReceived = $Matches[1]
+        }
     }
 
-    # Analyse intelligente de la cohérence des IPs avec contexte SPF
+    
+    # Vérification qu'au moins une IP a été extraite
+    if ([string]::IsNullOrWhiteSpace($ipFromAuth) -and [string]::IsNullOrWhiteSpace($ipFromSPF) -and [string]::IsNullOrWhiteSpace($ipFromReceived)) {
+        Write-Host "`nErreur : Aucune IP n'a pu être extraite des headers." -ForegroundColor Red
+        Write-Host "`nDétails des extractions :" -ForegroundColor Yellow
+        Write-Host "  - Authentication-Results (sender IP is ...) : NON TROUVÉ" -ForegroundColor Gray
+        Write-Host "  - Received-SPF (client-ip=...) : NON TROUVÉ" -ForegroundColor Gray
+        Write-Host "  - Received: from [...] : NON TROUVÉ" -ForegroundColor Gray
+        Write-Host "`nVérifiez que le fichier EML contient bien ces informations." -ForegroundColor Yellow
+        Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        return
+    }
+    
+    # Comparaison des IPs
     $finalIP = $null
     $spfPassed = $authResultsHeader -match "spf=pass"
     
-    if ($ipFromAuth -eq $ipFromSPF -and $ipFromAuth -eq $ipFromReceived) {
+    # Vérifier que les IPs sont identiques ET non vides
+    if (-not [string]::IsNullOrWhiteSpace($ipFromAuth) -and 
+        $ipFromAuth -eq $ipFromSPF -and 
+        $ipFromAuth -eq $ipFromReceived) {
         $finalIP = $ipFromAuth
         Write-Host "`nIP extraite : $finalIP" -ForegroundColor Green
         Write-Host "(Cohérence confirmée dans tous les headers)" -ForegroundColor Cyan
@@ -380,6 +464,7 @@ function Submit-IPFromEML {
     }
 
 
+
     if (-not (Test-IPv4 -IP $finalIP)) {
         Write-Host "`nErreur : L'IP extraite n'est pas valide : '$finalIP'" -ForegroundColor Red
         Write-Host "Format attendu : X.X.X.X (où X = 0-255)" -ForegroundColor Yellow
@@ -431,7 +516,7 @@ function Submit-IPFromEML {
         Write-Host "  17 = Spoofing" -ForegroundColor White
     }
 
-    $categories = Read-Host "`nEntrez les catégories (séparées par des virgules) [Entrée = suggestion]"
+    $categories = Read-Host "`nEntrez les catégories (séparées par des virgules) [Entrée = Catégories suggérées]"
     if ([string]::IsNullOrWhiteSpace($categories)) {
         $categories = $suggestedCategories
     }
@@ -479,7 +564,10 @@ function Submit-IPFromEML {
     }
 
     if ($subjectHeader) {
-        $cleanHeader = $subjectHeader
+        # Décoder le Subject si encodé en MIME
+        $decodedSubject = Decode-MimeHeader -EncodedText $subjectHeader
+        
+        $cleanHeader = $decodedSubject
         foreach ($word in $wordsToExclude) {
             if ($word -ne "") {
                 $cleanHeader = $cleanHeader -replace [regex]::Escape($word), "username"
@@ -507,11 +595,14 @@ function Submit-IPFromEML {
         $comment = $comment.Substring(0, 1024)
     }
     
-    # Extraction de la date depuis Received: from
+    # Extraction de la date depuis le PREMIER Received: from (plus proche du sender)
     $timestamp = $null
-    if ($receivedFromHeader -and $receivedFromHeader -match ";\s*(.+)$") {
-        $dateString = $Matches[1].Trim()
-        $timestamp = Convert-ToISO8601 -DateString $dateString
+    if ($receivedFromHeaders.Count -gt 0) {
+        $firstReceivedHeader = $receivedFromHeaders[0]  # Premier = plus proche du sender
+        if ($firstReceivedHeader -match ";\\s*(.+)$") {
+            $dateString = $Matches[1].Trim()
+            $timestamp = Convert-ToISO8601 -DateString $dateString
+        }
     }
 
     # Récapitulatif
