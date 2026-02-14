@@ -233,18 +233,73 @@ function Submit-IPFromEML {
     $emlPathRaw = Read-Host "Chemin du fichier"
     $emlPathRaw = $emlPathRaw.Trim('"').Trim("'")
 
+    # Vérification si le fichier existe
     if (-not (Test-Path -LiteralPath $emlPathRaw)) {
         Write-Host "`nErreur : Fichier introuvable : $emlPathRaw" -ForegroundColor Red
+        Write-Host "Recherche des fichiers .eml dans le répertoire...`n" -ForegroundColor Yellow
+    
+        # Extraire le répertoire du chemin fourni
+        $directory = Split-Path -LiteralPath $emlPathRaw -ErrorAction SilentlyContinue
+    
+        # Si Split-Path échoue (chemin invalide), utiliser le répertoire courant
+        if ([string]::IsNullOrWhiteSpace($directory) -or -not (Test-Path -LiteralPath $directory)) {
+            $directory = Get-Location
+            Write-Host "Utilisation du répertoire courant : $directory" -ForegroundColor Cyan
+        }
+    
+        # Rechercher tous les fichiers .eml dans ce répertoire
+        $emlFiles = Get-ChildItem -LiteralPath $directory -Filter "*.eml" -ErrorAction SilentlyContinue
+    
+        if ($emlFiles.Count -eq 0) {
+            Write-Host "Aucun fichier .eml trouvé dans le dossier." -ForegroundColor DarkYellow
+            Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            return
+        }
+    
+        # Si un seul fichier trouvé, le sélectionner automatiquement
+        if ($emlFiles.Count -eq 1) {
+            $emlPathRaw = $emlFiles[0].FullName
+            Write-Host "Un seul fichier .eml trouvé, sélection automatique :" -ForegroundColor Green
+            Write-Host "→ $emlPathRaw" -ForegroundColor Green
+        }
+        else {
+            # Afficher la liste numérotée des fichiers trouvés
+            Write-Host "Fichiers .eml disponibles dans le dossier :" -ForegroundColor Yellow
+            for ($i = 0; $i -lt $emlFiles.Count; $i++) {
+                Write-Host ("{0}. {1}" -f ($i+1), $emlFiles[$i].Name)
+            }
+        
+            # Demander à l'utilisateur de choisir un fichier
+            $choice = Read-Host "`nEntrez le numéro du fichier à utiliser (ou appuyez sur Entrée pour annuler)"
+        
+            if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $emlFiles.Count) {
+                $emlPathRaw = $emlFiles[[int]$choice - 1].FullName
+                Write-Host "`nFichier sélectionné : $emlPathRaw" -ForegroundColor Green
+            } else {
+                Write-Host "Aucun fichier choisi, retour au menu." -ForegroundColor DarkYellow
+                Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                return
+            }
+        }
+    }
+
+    # Vérification finale que le fichier existe bien
+    if (-not (Test-Path -LiteralPath $emlPathRaw)) {
+        Write-Host "`nErreur : Impossible d'accéder au fichier sélectionné." -ForegroundColor Red
         Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         return
     }
 
+    Write-Host "`nFichier confirmé : $emlPathRaw" -ForegroundColor Green
+
     # Lecture du fichier
     $emlContent = Get-Content -LiteralPath $emlPathRaw -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($emlContent)) {
         Write-Host "`nErreur : Le fichier EML est vide." -ForegroundColor Red
-        Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
+            Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         return
     }
