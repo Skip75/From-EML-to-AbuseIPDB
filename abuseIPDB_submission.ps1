@@ -229,34 +229,34 @@ function Submit-IPFromEML {
     Write-Host "=============================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Glissez-déposez le fichier .eml dans cette fenêtre (ou entrez le chemin):" -ForegroundColor Yellow
-
+    
     $emlPathRaw = Read-Host "Chemin du fichier"
     $emlPathRaw = $emlPathRaw.Trim('"').Trim("'")
-
+    
     # Vérification si le fichier existe
     if (-not (Test-Path -LiteralPath $emlPathRaw)) {
         Write-Host "`nErreur : Fichier introuvable : $emlPathRaw" -ForegroundColor Red
         Write-Host "Recherche des fichiers .eml dans le répertoire...`n" -ForegroundColor Yellow
-    
+        
         # Extraire le répertoire du chemin fourni
         $directory = Split-Path -LiteralPath $emlPathRaw -ErrorAction SilentlyContinue
-    
+        
         # Si Split-Path échoue (chemin invalide), utiliser le répertoire courant
         if ([string]::IsNullOrWhiteSpace($directory) -or -not (Test-Path -LiteralPath $directory)) {
             $directory = Get-Location
             Write-Host "Utilisation du répertoire courant : $directory" -ForegroundColor Cyan
         }
-    
+        
         # Rechercher tous les fichiers .eml dans ce répertoire
         $emlFiles = Get-ChildItem -LiteralPath $directory -Filter "*.eml" -ErrorAction SilentlyContinue
-    
+        
         if ($emlFiles.Count -eq 0) {
             Write-Host "Aucun fichier .eml trouvé dans le dossier." -ForegroundColor DarkYellow
             Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
             $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
             return
         }
-    
+        
         # Si un seul fichier trouvé, le sélectionner automatiquement
         if ($emlFiles.Count -eq 1) {
             $emlPathRaw = $emlFiles[0].FullName
@@ -269,10 +269,10 @@ function Submit-IPFromEML {
             for ($i = 0; $i -lt $emlFiles.Count; $i++) {
                 Write-Host ("{0}. {1}" -f ($i+1), $emlFiles[$i].Name)
             }
-        
+            
             # Demander à l'utilisateur de choisir un fichier
             $choice = Read-Host "`nEntrez le numéro du fichier à utiliser (ou appuyez sur Entrée pour annuler)"
-        
+            
             if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $emlFiles.Count) {
                 $emlPathRaw = $emlFiles[[int]$choice - 1].FullName
                 Write-Host "`nFichier sélectionné : $emlPathRaw" -ForegroundColor Green
@@ -284,7 +284,7 @@ function Submit-IPFromEML {
             }
         }
     }
-
+    
     # Vérification finale que le fichier existe bien
     if (-not (Test-Path -LiteralPath $emlPathRaw)) {
         Write-Host "`nErreur : Impossible d'accéder au fichier sélectionné." -ForegroundColor Red
@@ -292,14 +292,14 @@ function Submit-IPFromEML {
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         return
     }
-
+    
     Write-Host "`nFichier confirmé : $emlPathRaw" -ForegroundColor Green
-
+    
     # Lecture du fichier
     $emlContent = Get-Content -LiteralPath $emlPathRaw -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($emlContent)) {
         Write-Host "`nErreur : Le fichier EML est vide." -ForegroundColor Red
-            Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
+        Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         return
     }
@@ -576,48 +576,69 @@ function Submit-IPFromEML {
         $categories = $suggestedCategories
     }
 
-    # Demander à l'utilisateur d'exclure des mots
-    Write-Host "`nSouhaitez-vous exclure des mots sensibles des headers ?" -ForegroundColor Yellow
-    $excludeWords = Read-Host "Entrez les mots à exclure (séparés par des virgules) [Entrée = aucun]"
-
-    $wordsToExclude = @()
+    # Demander à l'utilisateur d'exclure des mots (en plus de "skipwoof")
+    Write-Host "Souhaitez-vous ajouter des mots sensibles à exclure des headers ? (Nom de famille, etc...)" -ForegroundColor Yellow
+    $excludeWords = Read-Host "Entrez des mots à exclure (séparés par des virgules) [Entrée = ignorer cette étape]"
+    
+    $wordsToExclude = @("skipwoof")  # Mot par défaut
     if (-not [string]::IsNullOrWhiteSpace($excludeWords)) {
-        $wordsToExclude = $excludeWords -split "," | ForEach-Object { $_.Trim() }
+        $additionalWords = $excludeWords -split "," | ForEach-Object { $_.Trim() }
+        $wordsToExclude += $additionalWords
     }
+    
+    Write-Host "`n✓ Mots exclus : $($wordsToExclude -join ', ')" -ForegroundColor Green
+
 
     # Construction du commentaire avec tous les headers récupérés
     $commentParts = @()
-
+    
     if ($authResultsHeader) {
         $cleanHeader = $authResultsHeader
         foreach ($word in $wordsToExclude) {
             if ($word -ne "") {
-                $cleanHeader = $cleanHeader -replace [regex]::Escape($word), "username"
+                # Si c'est "skipwoof" (insensible à la casse), remplacer par "username"
+                # Sinon, remplacer par un espace
+                if ($word -match "^skipwoof$") {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", "username"
+                }
+                else {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", " "
+                }
             }
         }
         $commentParts += $cleanHeader
     }
-
+    
     if ($receivedSPFHeader) {
         $cleanHeader = $receivedSPFHeader
         foreach ($word in $wordsToExclude) {
             if ($word -ne "") {
-                $cleanHeader = $cleanHeader -replace [regex]::Escape($word), "username"
+                if ($word -match "^skipwoof$") {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", "username"
+                }
+                else {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", " "
+                }
             }
         }
         $commentParts += $cleanHeader
     }
-
+    
     if ($receivedFromHeader) {
         $cleanHeader = $receivedFromHeader
         foreach ($word in $wordsToExclude) {
             if ($word -ne "") {
-                $cleanHeader = $cleanHeader -replace [regex]::Escape($word), "username"
+                if ($word -match "^skipwoof$") {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", "username"
+                }
+                else {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", " "
+                }
             }
         }
         $commentParts += $cleanHeader
     }
-
+    
     if ($subjectHeader) {
         # Décoder le Subject si encodé en MIME
         $decodedSubject = Decode-MimeHeader -EncodedText $subjectHeader
@@ -625,21 +646,32 @@ function Submit-IPFromEML {
         $cleanHeader = $decodedSubject
         foreach ($word in $wordsToExclude) {
             if ($word -ne "") {
-                $cleanHeader = $cleanHeader -replace [regex]::Escape($word), "username"
+                if ($word -match "^skipwoof$") {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", "username"
+                }
+                else {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", " "
+                }
+            }
+        }
+        $commentParts += $cleanHeader
+    }
+    
+    if ($fromHeader) {
+        $cleanHeader = $fromHeader
+        foreach ($word in $wordsToExclude) {
+            if ($word -ne "") {
+                if ($word -match "^skipwoof$") {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", "username"
+                }
+                else {
+                    $cleanHeader = $cleanHeader -replace "(?i)$([regex]::Escape($word))", " "
+                }
             }
         }
         $commentParts += $cleanHeader
     }
 
-    if ($fromHeader) {
-        $cleanHeader = $fromHeader
-        foreach ($word in $wordsToExclude) {
-            if ($word -ne "") {
-                $cleanHeader = $cleanHeader -replace [regex]::Escape($word), "username"
-            }
-        }
-        $commentParts += $cleanHeader
-    }
 
     $comment = $commentParts -join " | "
     
