@@ -230,11 +230,17 @@ function Submit-IPFromEML {
     Write-Host ""
     Write-Host "Glissez-déposez le fichier .eml dans cette fenêtre (ou entrez le chemin):" -ForegroundColor Yellow
     
-    $emlPathRaw = Read-Host "Chemin du fichier"
-    $emlPathRaw = $emlPathRaw.Trim('"').Trim("'")
-    
-    # Vérification si le fichier existe
-    if (-not (Test-Path -LiteralPath $emlPathRaw)) {
+    do {
+        $emlPathRaw = Read-Host "Chemin du fichier"
+        $emlPathRaw = $emlPathRaw.Trim('"').Trim("'")
+
+            if ([string]::IsNullOrWhiteSpace($emlPathRaw)) {
+                Write-Host "  ⚠ Chemin vide. Veuillez glisser-déposer ou saisir le chemin d'un fichier .eml." -ForegroundColor Yellow
+            }
+        } while ([string]::IsNullOrWhiteSpace($emlPathRaw))
+
+        # Vérification si le fichier existe
+        if (-not (Test-Path -LiteralPath $emlPathRaw)) {
         Write-Host "`nErreur : Fichier introuvable : $emlPathRaw" -ForegroundColor Red
         Write-Host "Recherche des fichiers .eml dans le répertoire...`n" -ForegroundColor Yellow
         
