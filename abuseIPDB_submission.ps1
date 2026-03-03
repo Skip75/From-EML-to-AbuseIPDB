@@ -234,13 +234,14 @@ function Submit-IPFromEML {
         $emlPathRaw = Read-Host "Chemin du fichier"
         $emlPathRaw = $emlPathRaw.Trim('"').Trim("'")
 
-            if ([string]::IsNullOrWhiteSpace($emlPathRaw)) {
-                Write-Host "  ⚠ Chemin vide. Veuillez glisser-déposer ou saisir le chemin d'un fichier .eml." -ForegroundColor Yellow
-            }
-        } while ([string]::IsNullOrWhiteSpace($emlPathRaw))
+        if ([string]::IsNullOrWhiteSpace($emlPathRaw)) {
+            Write-Host "  ⚠ Chemin vide. Veuillez glisser-déposer ou saisir le chemin d'un fichier .eml." -ForegroundColor Yellow
+        }
+    } while ([string]::IsNullOrWhiteSpace($emlPathRaw))
 
-        # Vérification si le fichier existe
-        if (-not (Test-Path -LiteralPath $emlPathRaw)) {
+    # Vérification si le fichier existe
+    if (-not (Test-Path -LiteralPath $emlPathRaw)) {
+
         Write-Host "`nErreur : Fichier introuvable : $emlPathRaw" -ForegroundColor Red
         Write-Host "Recherche des fichiers .eml dans le répertoire...`n" -ForegroundColor Yellow
         
@@ -341,16 +342,15 @@ function Submit-IPFromEML {
     $subjectHeaders = @($normalizedHeaders | Where-Object { $_ -match "^Subject:" })
     $fromHeaders = @($normalizedHeaders | Where-Object { $_ -match "^From:" })
 
-    # Vérification de la présence des headers
-    if ($authResultsHeaders.Count -eq 0 -or $receivedSPFHeaders.Count -eq 0 -or $fromHeaders.Count -eq 0) {
-        Write-Host "`nErreur : Le fichier EML ne contient pas les headers nécessaires." -ForegroundColor Red
-        Write-Host "Headers manquants :" -ForegroundColor Yellow
-        if ($authResultsHeaders.Count -eq 0) { Write-Host "  - Authentication-Results" }
-        if ($receivedSPFHeaders.Count -eq 0) { Write-Host "  - Received-SPF" }
-        if ($fromHeaders.Count -eq 0) { Write-Host "  - From" }
-        Write-Host "`nAppuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
-        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-        return
+    # Vérification SPF : Received-SPF en priorité, sinon recherche globale dans tous les headers
+    if ($receivedSPFHeaders.Count -eq 0) {
+        $spfGlobalFound = ($normalizedHeaders | Where-Object { $_ -match "(?i)\bspf=(pass|fail|softfail|neutral|none|temperror|permerror)\b" }).Count -gt 0
+        if (-not $spfGlobalFound) {
+            Write-Host "`nErreur : Aucun résultat SPF trouvé dans les headers du fichier EML." -ForegroundColor Red
+            Write-Host "Appuyez sur une touche pour revenir au menu..." -ForegroundColor Yellow
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            return
+        }
     }
 
     # Gestion des doublons avec sélection utilisateur
@@ -362,10 +362,13 @@ function Submit-IPFromEML {
         $authResultsHeader = Select-FromDuplicates -HeaderName "Authentication-Results" -Headers $authResultsHeaders
     }
 
-    $receivedSPFHeader = $receivedSPFHeaders[0]
-    if ($receivedSPFHeaders.Count -gt 1) {
-        Write-Host "`nALERTE : Header 'Received-SPF' trouvé $($receivedSPFHeaders.Count) fois (possible spoofing) !" -ForegroundColor Red
-        $receivedSPFHeader = Select-FromDuplicates -HeaderName "Received-SPF" -Headers $receivedSPFHeaders
+    $receivedSPFHeader = $null
+    if ($receivedSPFHeaders.Count -gt 0) {
+        $receivedSPFHeader = $receivedSPFHeaders[0]
+        if ($receivedSPFHeaders.Count -gt 1) {
+            Write-Host "`nALERTE : Header 'Received-SPF' trouvé $($receivedSPFHeaders.Count) fois (possible spoofing) !" -ForegroundColor Red
+            $receivedSPFHeader = Select-FromDuplicates -HeaderName "Received-SPF" -Headers $receivedSPFHeaders
+        }
     }
 
     $fromHeader = $fromHeaders[0]
@@ -442,24 +445,42 @@ function Submit-IPFromEML {
         return
     }
     
-    # Comparaison des IPs
+    # Comparaison des IPs (sources absentes exclues de la comparaison)
     $finalIP = $null
+
+    # spf=pass : chercher dans le header sélectionné ET dans tous les headers (fallback global)
     $spfPassed = $authResultsHeader -match "spf=pass"
-    
-    # Vérifier que les IPs sont identiques ET non vides
-    if (-not [string]::IsNullOrWhiteSpace($ipFromAuth) -and 
-        $ipFromAuth -eq $ipFromSPF -and 
-        $ipFromAuth -eq $ipFromReceived) {
-        $finalIP = $ipFromAuth
+    if (-not $spfPassed) {
+        $spfPassed = ($normalizedHeaders | Where-Object { $_ -match "(?i)\bspf=pass\b" }).Count -gt 0
+    }
+
+    # Construire la liste des IPs non nulles disponibles
+    $knownIPs = @()
+    if (-not [string]::IsNullOrWhiteSpace($ipFromAuth))     { $knownIPs += $ipFromAuth }
+    if (-not [string]::IsNullOrWhiteSpace($ipFromSPF))      { $knownIPs += $ipFromSPF }
+    if (-not [string]::IsNullOrWhiteSpace($ipFromReceived)) { $knownIPs += $ipFromReceived }
+
+    $uniqueKnownIPs = @($knownIPs | Select-Object -Unique)
+
+    if ($uniqueKnownIPs.Count -eq 1) {
+        $finalIP = $uniqueKnownIPs[0]
         Write-Host "`nIP extraite : $finalIP" -ForegroundColor Green
-        Write-Host "(Cohérence confirmée dans tous les headers)" -ForegroundColor Cyan
+        if ($knownIPs.Count -lt 3) {
+            Write-Host "(Cohérence confirmée sur $($knownIPs.Count)/3 sources disponibles)" -ForegroundColor Cyan
+        } else {
+            Write-Host "(Cohérence confirmée dans tous les headers)" -ForegroundColor Cyan
+        }
     }
     else {
-        Write-Host "`n⚠️ IPs différentes détectées dans les headers" -ForegroundColor Yellow
+        $authLabel = if ([string]::IsNullOrWhiteSpace($ipFromAuth))     { "N/A (non trouvée)" }   else { $ipFromAuth }
+        $spfLabel  = if ([string]::IsNullOrWhiteSpace($ipFromSPF))      { "N/A (header absent)" } else { $ipFromSPF }
+        $recvLabel = if ([string]::IsNullOrWhiteSpace($ipFromReceived)) { "N/A (non trouvée)" }   else { $ipFromReceived }
+
+        Write-Host "`n⚠️ IPs différentes ou sources incomplètes détectées" -ForegroundColor Yellow
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-        Write-Host "  1. Authentication-Results : $ipFromAuth" -ForegroundColor White
-        Write-Host "  2. Received-SPF           : $ipFromSPF" -ForegroundColor White
-        Write-Host "  3. Received: from         : $ipFromReceived" -ForegroundColor White
+        Write-Host "  1. Authentication-Results : $authLabel" -ForegroundColor White
+        Write-Host "  2. Received-SPF           : $spfLabel" -ForegroundColor White
+        Write-Host "  3. Received: from         : $recvLabel" -ForegroundColor White
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
         
         # Analyse contextuelle et détermination de la recommandation
@@ -705,6 +726,10 @@ function Submit-IPFromEML {
             
             if ($semicolonIndex -ge 0) {
                 $dateString = $receivedHeader.Substring($semicolonIndex + 1).Trim()
+                # Supprimer le commentaire timezone de fin : ex (CET), (UTC), (UTC+1)...
+                $dateString = $dateString -replace '\s*\([^)]*\)\s*$', ''
+                # Normaliser les espaces multiples : ex "Tue,  3 Mar" -> "Tue, 3 Mar"
+                $dateString = ($dateString.Trim() -replace '\s+', ' ')
                 
                 try {
                     $culture = [System.Globalization.CultureInfo]::InvariantCulture
