@@ -421,16 +421,13 @@ function Submit-IPFromEML {
     # Extraction de l'IP depuis Received: from (supporte [] et ())
     $ipFromReceived = $null
     if ($receivedFromHeader) {
-        # Chercher d'abord entre crochets [IP]
-        if ($receivedFromHeader -match "\[([0-9.]+)\]") {
+        if ($receivedFromHeader -match "\(([0-9]{1,3}(?:\.[0-9]{1,3}){3})\)") {
             $ipFromReceived = $Matches[1]
         }
-        # Si pas trouvé, chercher entre parenthèses (IP)
-        elseif ($receivedFromHeader -match "\(([0-9.]+)\)") {
+        elseif ($receivedFromHeader -match "\[([0-9]{1,3}(?:\.[0-9]{1,3}){3})\]") {
             $ipFromReceived = $Matches[1]
         }
     }
-
     
     # Vérification qu'au moins une IP a été extraite
     if ([string]::IsNullOrWhiteSpace($ipFromAuth) -and [string]::IsNullOrWhiteSpace($ipFromSPF) -and [string]::IsNullOrWhiteSpace($ipFromReceived)) {
@@ -488,6 +485,7 @@ function Submit-IPFromEML {
         
         $recommendedChoice = "1"  # Par défaut Authentication-Results
         
+
         if ($spfPassed) {
             Write-Host "  ✓ SPF = PASS" -ForegroundColor Green
             Write-Host "    → Cela peut indiquer :" -ForegroundColor Gray
@@ -501,11 +499,17 @@ function Submit-IPFromEML {
         }
         else {
             Write-Host "  ✗ SPF = FAIL ou SOFTFAIL" -ForegroundColor Red
-            Write-Host "    → Cela indique probablement :" -ForegroundColor Gray
-            Write-Host "      • Spoofing / Usurpation d'identité" -ForegroundColor Red
-            Write-Host "      • Serveur non autorisé pour ce domaine" -ForegroundColor Red
-            Write-Host "      • IP source probablement malveillante" -ForegroundColor Red
-            $recommendedChoice = "3"
+            Write-Host "    → L'IP dans Authentication-Results EST l'IP qui a échoué le contrôle SPF" -ForegroundColor Gray
+            Write-Host "      • C'est le serveur envoyeur non autorisé pour ce domaine" -ForegroundColor Red
+            Write-Host "      • Spoofing / Usurpation d'identité probable" -ForegroundColor Red
+            Write-Host "      • Reporter cette IP, pas l'identifiant HELO du Received: from" -ForegroundColor Red
+            # En cas de SPF FAIL : Authentication-Results contient l'IP vérifiée par le MTA → option 1
+            # Fallback sur Received-SPF (option 2) si Authentication-Results est absent
+            if (-not [string]::IsNullOrWhiteSpace($ipFromAuth)) {
+                $recommendedChoice = "1"
+            } else {
+                $recommendedChoice = "2"
+            }
         }
         
         Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
@@ -513,13 +517,21 @@ function Submit-IPFromEML {
         
         if ($recommendedChoice -eq "1") {
             Write-Host "   → Option 1 : Authentication-Results ($ipFromAuth)" -ForegroundColor Green
-            Write-Host "     (IP de connexion initiale au serveur de réception)" -ForegroundColor Gray
+            if ($spfPassed) {
+                Write-Host "     (IP de connexion initiale au serveur de réception)" -ForegroundColor Gray
+            } else {
+                Write-Host "     (IP ayant échoué le contrôle SPF — source du spam)" -ForegroundColor Gray
+            }
+        }
+        elseif ($recommendedChoice -eq "2") {
+            Write-Host "   → Option 2 : Received-SPF ($ipFromSPF)" -ForegroundColor Green
+            Write-Host "     (IP client-ip du Received-SPF — Authentication-Results absent)" -ForegroundColor Gray
         }
         else {
             Write-Host "   → Option 3 : Received: from ($ipFromReceived)" -ForegroundColor Green
-            Write-Host "     (IP source la plus probable car SPF a échoué)" -ForegroundColor Gray
+            Write-Host "     (IP source du Received: from)" -ForegroundColor Gray
         }
-        
+
         Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
         
         $ipChoice = Read-Host "`nQuelle IP souhaitez-vous soumettre ? (1-3) [Entrée = $recommendedChoice recommandé]"
