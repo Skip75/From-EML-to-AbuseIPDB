@@ -603,7 +603,7 @@ function Submit-IPFromEML {
         $suggestedCategories = "7,11,17"
     }
 
-    Write-Host "`nCatégories suggérées : $suggestedCategories" -ForegroundColor Cyan
+    Write-Host "`nCatégories suggérées : $suggestedCategories (liste complète sur abuseipdb.com/categories)" -ForegroundColor Cyan
     Write-Host "  7 = Phishing" -ForegroundColor White
     Write-Host "  11 = Email Spam" -ForegroundColor White
     if ($isSpoofing) {
