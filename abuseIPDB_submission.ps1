@@ -6,6 +6,10 @@
 # Forcer TLS1.2
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# Forcer l'encodage UTF-8 pour la console
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 # Configuration de l'API
 $API_KEY = "VOTRE_CLE_API_ABUSEIPDB"
 $API_BASE_URL = "https://api.abuseipdb.com/api/v2"
@@ -235,7 +239,7 @@ function Submit-IPFromEML {
         $emlPathRaw = $emlPathRaw.Trim('"').Trim("'")
 
         if ([string]::IsNullOrWhiteSpace($emlPathRaw)) {
-            Write-Host "  ⚠ Chemin vide. Veuillez glisser-déposer ou saisir le chemin d'un fichier .eml." -ForegroundColor Yellow
+            Write-Host "  [!] Chemin vide. Veuillez glisser-déposer ou saisir le chemin d'un fichier .eml." -ForegroundColor Yellow
         }
     } while ([string]::IsNullOrWhiteSpace($emlPathRaw))
 
@@ -428,6 +432,7 @@ function Submit-IPFromEML {
             $ipFromReceived = $Matches[1]
         }
     }
+
     
     # Vérification qu'au moins une IP a été extraite
     if ([string]::IsNullOrWhiteSpace($ipFromAuth) -and [string]::IsNullOrWhiteSpace($ipFromSPF) -and [string]::IsNullOrWhiteSpace($ipFromReceived)) {
@@ -473,32 +478,31 @@ function Submit-IPFromEML {
         $spfLabel  = if ([string]::IsNullOrWhiteSpace($ipFromSPF))      { "N/A (header absent)" } else { $ipFromSPF }
         $recvLabel = if ([string]::IsNullOrWhiteSpace($ipFromReceived)) { "N/A (non trouvée)" }   else { $ipFromReceived }
 
-        Write-Host "`n⚠️ IPs différentes ou sources incomplètes détectées" -ForegroundColor Yellow
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+        Write-Host "`n[!] IPs différentes ou sources incomplètes détectées" -ForegroundColor Yellow
+        Write-Host "-------------------------------------------" -ForegroundColor DarkGray
         Write-Host "  1. Authentication-Results : $authLabel" -ForegroundColor White
         Write-Host "  2. Received-SPF           : $spfLabel" -ForegroundColor White
         Write-Host "  3. Received: from         : $recvLabel" -ForegroundColor White
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+        Write-Host "-------------------------------------------" -ForegroundColor DarkGray
         
         # Analyse contextuelle et détermination de la recommandation
-        Write-Host "`n📊 Analyse contextuelle :" -ForegroundColor Cyan
+        Write-Host "`n[i] Analyse contextuelle :" -ForegroundColor Cyan
         
         $recommendedChoice = "1"  # Par défaut Authentication-Results
         
-
         if ($spfPassed) {
-            Write-Host "  ✓ SPF = PASS" -ForegroundColor Green
+            Write-Host "  [OK] SPF = PASS" -ForegroundColor Green
             Write-Host "    → Cela peut indiquer :" -ForegroundColor Gray
             Write-Host "      • Email forwarding légitime (ex: forwarding automatique)" -ForegroundColor Gray
             Write-Host "      • Service SMTP relay autorisé (ex: Mailchimp, SendGrid)" -ForegroundColor Gray
             Write-Host "      • Load balancer avec plusieurs IPs légitimes" -ForegroundColor Gray
-            Write-Host "`n    ⚠️ MAIS si le contenu est malveillant, c'est probablement :" -ForegroundColor Yellow
+            Write-Host "`n    [!] MAIS si le contenu est malveillant, c'est probablement :" -ForegroundColor Yellow
             Write-Host "      • Un serveur compromis légitime utilisé pour spam" -ForegroundColor Yellow
             Write-Host "      • Une usurpation avec SPF mal configuré" -ForegroundColor Yellow
             $recommendedChoice = "1"
         }
         else {
-            Write-Host "  ✗ SPF = FAIL ou SOFTFAIL" -ForegroundColor Red
+            Write-Host "  [X] SPF = FAIL ou SOFTFAIL" -ForegroundColor Red
             Write-Host "    → L'IP dans Authentication-Results EST l'IP qui a échoué le contrôle SPF" -ForegroundColor Gray
             Write-Host "      • C'est le serveur envoyeur non autorisé pour ce domaine" -ForegroundColor Red
             Write-Host "      • Spoofing / Usurpation d'identité probable" -ForegroundColor Red
@@ -512,7 +516,7 @@ function Submit-IPFromEML {
             }
         }
         
-        Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+        Write-Host "`n-------------------------------------------" -ForegroundColor DarkGray
         Write-Host "`n💡 Recommandation du script :" -ForegroundColor Cyan
         
         if ($recommendedChoice -eq "1") {
@@ -532,7 +536,7 @@ function Submit-IPFromEML {
             Write-Host "     (IP source du Received: from)" -ForegroundColor Gray
         }
 
-        Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+        Write-Host "`n-------------------------------------------" -ForegroundColor DarkGray
         
         $ipChoice = Read-Host "`nQuelle IP souhaitez-vous soumettre ? (1-3) [Entrée = $recommendedChoice recommandé]"
         
@@ -577,25 +581,60 @@ function Submit-IPFromEML {
     $suggestedCategories = "7,11"
     $isSpoofing = $false
 
-    # Vérifier SPF
+    # ── Critère 1 : SPF non passé ──────────────────────────────────────────
     if ($authResultsHeader -notmatch "spf=pass") {
         $isSpoofing = $true
-        Write-Host "  - SPF non passé détecté (spoofing possible)" -ForegroundColor Yellow
+        Write-Host "  [!] SPF non passé détecté (spoofing possible)" -ForegroundColor Yellow
     }
 
-    # Vérifier correspondance domaine From vs Authentication-Results
-    $emailFrom = Extract-Email -Text $fromHeader
-    if ($emailFrom) {
-        $domainFrom = Extract-Domain -Email $emailFrom
-        $domainAuth = Extract-AuthDomain -AuthHeader $authResultsHeader
+    # ── Extraire le domaine From: ───────────────────────────────────────────
+    $emailFrom  = Extract-Email -Text $fromHeader
+    $domainFrom = if ($emailFrom) { Extract-Domain -Email $emailFrom } else { $null }
 
-        Write-Host "  - Email extrait : $emailFrom" -ForegroundColor Gray
-        Write-Host "  - Domaine extrait du From: $domainFrom" -ForegroundColor Gray
-        Write-Host "  - Domaine extrait de Authentication-Results: $domainAuth" -ForegroundColor Gray
+    if ($domainFrom) {
+        Write-Host "  - Email extrait (From)  : $emailFrom" -ForegroundColor Gray
+        Write-Host "  - Domaine From          : $domainFrom" -ForegroundColor Gray
+    }
 
-        if ($domainFrom -and $domainAuth -and $domainFrom -ne $domainAuth) {
+    # ── Critère 2 : domaine Auth-Results ≠ domaine From ───────────────────
+    $domainAuth = Extract-AuthDomain -AuthHeader $authResultsHeader
+    Write-Host "  - Domaine Authentication-Results (smtp.mailfrom/header.from) : $domainAuth" -ForegroundColor Gray
+    if ($domainFrom -and $domainAuth -and $domainFrom -ne $domainAuth) {
+        $isSpoofing = $true
+        Write-Host "  [!] Domaine From ($domainFrom) ≠ domaine Auth-Results ($domainAuth)" -ForegroundColor Yellow
+    }
+
+    # ── Critère 3 : domaine DKIM ≠ domaine From ─────────────────
+    # Chercher header.d= dans Authentication-Results (domaine signataire DKIM vérifié par le MTA)
+    $dkimDomain = $null
+    if ($authResultsHeader -match "dkim=\S+\s+header\.d=([a-zA-Z0-9.\-]+)") {
+        $dkimDomain = $Matches[1].ToLower().Trim(".")
+    }
+    # Fallback : lire directement le header DKIM-Signature: d=
+    if (-not $dkimDomain) {
+        $dkimSigHeaders = @($normalizedHeaders | Where-Object { $_ -match "^DKIM-Signature:" })
+        if ($dkimSigHeaders.Count -gt 0 -and $dkimSigHeaders[0] -match "\bd=([a-zA-Z0-9.\-]+)") {
+            $dkimDomain = $Matches[1].ToLower().Trim(".")
+        }
+    }
+    Write-Host "  - Domaine DKIM (d=)     : $(if ($dkimDomain) { $dkimDomain } else { 'non trouvé' })" -ForegroundColor Gray
+    if ($domainFrom -and $dkimDomain -and $domainFrom.ToLower() -ne $dkimDomain) {
+        $isSpoofing = $true
+        Write-Host "  [!] Domaine DKIM ($dkimDomain) ≠ domaine From ($domainFrom) — usurpation d'identité probable" -ForegroundColor Yellow
+    }
+
+    # ── Critère 4 : header Sender: ≠ domaine From ───────────────
+    # Le header Sender: indique qui a réellement émis l'email (RFC 5322 §3.6.2)
+    # S'il diffère du From:, c'est un signal fort de spoofing
+    $senderHeaders = @($normalizedHeaders | Where-Object { $_ -match "^Sender:" })
+    if ($senderHeaders.Count -gt 0) {
+        $senderHeader   = $senderHeaders[0]
+        $emailSender    = Extract-Email -Text $senderHeader
+        $domainSender   = if ($emailSender) { Extract-Domain -Email $emailSender } else { $null }
+        Write-Host "  - Domaine Sender        : $(if ($domainSender) { $domainSender } else { 'non extrait' })" -ForegroundColor Gray
+        if ($domainFrom -and $domainSender -and $domainFrom.ToLower() -ne $domainSender.ToLower()) {
             $isSpoofing = $true
-            Write-Host "  - Domaine de l'expéditeur ($domainFrom) différent du domaine d'authentification ($domainAuth)" -ForegroundColor Yellow
+            Write-Host "  [!] Header Sender ($domainSender) ≠ domaine From ($domainFrom) — expéditeur réel masqué" -ForegroundColor Yellow
         }
     }
 
@@ -610,11 +649,6 @@ function Submit-IPFromEML {
         Write-Host "  17 = Spoofing" -ForegroundColor White
     }
 
-    $categories = Read-Host "`nEntrez les catégories (séparées par des virgules) [Entrée = Catégories suggérées]"
-    if ([string]::IsNullOrWhiteSpace($categories)) {
-        $categories = $suggestedCategories
-    }
-
     # Demander à l'utilisateur d'exclure des mots (en plus de "skipwoof")
     Write-Host "Souhaitez-vous ajouter des mots sensibles à exclure des headers ? (Nom de famille, etc...)" -ForegroundColor Yellow
     $excludeWords = Read-Host "Entrez des mots à exclure (séparés par des virgules) [Entrée = ignorer cette étape]"
@@ -625,7 +659,7 @@ function Submit-IPFromEML {
         $wordsToExclude += $additionalWords
     }
     
-    Write-Host "`n✓ Mots exclus : $($wordsToExclude -join ', ')" -ForegroundColor Green
+    Write-Host "`n[OK] Mots exclus : $($wordsToExclude -join ', ')" -ForegroundColor Green
 
 
     # Construction du commentaire avec tous les headers récupérés
@@ -716,7 +750,7 @@ function Submit-IPFromEML {
     
     # Vérifier et tronquer le commentaire si nécessaire (limite API = 1024 caractères)
     if ($comment.Length -gt 1024) {
-        Write-Host "`n⚠️ Attention : Le commentaire dépasse 1024 caractères (limite de l'API AbuseIPDB)." -ForegroundColor Yellow
+        Write-Host "`n[!] Attention : Le commentaire dépasse 1024 caractères (limite de l'API AbuseIPDB)." -ForegroundColor Yellow
         Write-Host "Il sera tronqué à 1024 caractères pour la soumission." -ForegroundColor Yellow
         $comment = $comment.Substring(0, 1024)
     }
@@ -760,10 +794,10 @@ function Submit-IPFromEML {
             # Garder la date la plus ancienne (Min)
             $oldestDate = ($allDates | Measure-Object -Minimum).Minimum
             $timestamp = $oldestDate.ToString("yyyy-MM-ddTHH:mm:ssZ")
-            Write-Host "`n✓ Timestamp le plus ancien sélectionné : $timestamp" -ForegroundColor Green
+            Write-Host "`n[OK] Timestamp le plus ancien sélectionné : $timestamp" -ForegroundColor Green
         }
         else {
-            Write-Host "`n⚠️ Aucune date n'a pu être extraite des Received: from" -ForegroundColor Yellow
+            Write-Host "`n[!] Aucune date n'a pu être extraite des Received: from" -ForegroundColor Yellow
         }
     }
 
@@ -821,7 +855,7 @@ function Submit-IPFromEML {
             -Body $body `
             -TimeoutSec 10
 
-        Write-Host "`n✓ Soumission réussie !" -ForegroundColor Green
+        Write-Host "`n[OK] Soumission réussie !" -ForegroundColor Green
         Write-Host "IP soumise : $($response.data.ipAddress)" -ForegroundColor White
         Write-Host "Score de confiance d'abus : $($response.data.abuseConfidenceScore)%" -ForegroundColor White
 
@@ -839,7 +873,7 @@ function Submit-IPFromEML {
         $errorMessage = $_.Exception.Message
         $errorResponse = $_.ErrorDetails.Message
 
-        Write-Host "`n✗ Erreur lors de la soumission !" -ForegroundColor Red
+        Write-Host "`n[X] Erreur lors de la soumission !" -ForegroundColor Red
 
         if ($errorResponse) {
             try {
