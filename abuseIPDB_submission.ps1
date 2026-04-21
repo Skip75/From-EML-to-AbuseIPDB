@@ -517,7 +517,7 @@ function Submit-IPFromEML {
         }
         
         Write-Host "`n-------------------------------------------" -ForegroundColor DarkGray
-        Write-Host "`n💡 Recommandation du script :" -ForegroundColor Cyan
+        Write-Host "`n[i] Recommandation du script :" -ForegroundColor Cyan
         
         if ($recommendedChoice -eq "1") {
             Write-Host "   → Option 1 : Authentication-Results ($ipFromAuth)" -ForegroundColor Green
