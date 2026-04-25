@@ -649,6 +649,16 @@ function Submit-IPFromEML {
         Write-Host "  17 = Spoofing" -ForegroundColor White
     }
 
+    # Option 1 — Assignation automatique (pas de prompt)
+    $categories = $suggestedCategories
+
+    # Option 2 — Avec prompt utilisateur (permet de modifier)
+    $categories = Read-Host "`nEntrez les catégories séparées par des virgules [Entrée = suggérées]"
+    if ([string]::IsNullOrWhiteSpace($categories)) {
+        $categories = $suggestedCategories
+        Write-Host "[OK] Catégories utilisées : $categories" -ForegroundColor Green
+    }
+
     # Demander à l'utilisateur d'exclure des mots (en plus de "skipwoof")
     Write-Host "Souhaitez-vous ajouter des mots sensibles à exclure des headers ? (Nom de famille, etc...)" -ForegroundColor Yellow
     $excludeWords = Read-Host "Entrez des mots à exclure (séparés par des virgules) [Entrée = ignorer cette étape]"
