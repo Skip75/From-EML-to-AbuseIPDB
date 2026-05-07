@@ -366,6 +366,10 @@ function Submit-IPFromEML {
         $authResultsHeader = Select-FromDuplicates -HeaderName "Authentication-Results" -Headers $authResultsHeaders
     }
 
+    if ($authResultsHeader -match '=\?[^?]+\?[BQbq]\?') {
+        $authResultsHeader = Decode-MimeHeader -EncodedText $authResultsHeader
+        }
+
     $receivedSPFHeader = $null
     if ($receivedSPFHeaders.Count -gt 0) {
         $receivedSPFHeader = $receivedSPFHeaders[0]
