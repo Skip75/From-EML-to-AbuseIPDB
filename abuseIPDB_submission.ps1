@@ -34,6 +34,7 @@ function Show-Menu {
 function Normalize-Headers {
     param([string]$Content)
 
+    $Content = $Content -replace '[\p{Cf}\u00A0\u2800\u180E\u205F\u202F]', ' '
     $lines = $Content -split "`r?`n"
     $normalized = @()
     $currentHeader = ""
@@ -61,28 +62,35 @@ function Normalize-Headers {
 function Extract-Email {
     param([string]$Text)
 
-    # Regex RFC 5322 complète supportant les emails internationalisés et caractères spéciaux
-    $emailPattern = "(?:[\u00A0-\uD7FF\uE000-\uFFFFa-z0-9!#$%&'*+/=?^_``{|}~-]+(?:\.[\u00A0-\uD7FF\uE000-\uFFFFa-z0-9!#$%&'*+/=?^_``{|}~-]+)*|`"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\[\x01-\x09\x0b\x0c\x0e-\x7f])*`")@(?:(?:[\u00A0-\uD7FF\uE000-\uFFFFa-z0-9](?:[\u00A0-\uD7FF\uE000-\uFFFF-a-z0-9-]*[\u00A0-\uD7FF\uE000-\uFFFFa-z0-9])?\.)+[\u00A0-\uD7FF\uE000-\uFFFFa-z0-9](?:[\u00A0-\uD7FF\uE000-\uFFFFa-z0-9-]*[\u00A0-\uD7FF\uE000-\uFFFFa-z0-9])?|\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3}\])"
-
-    if ($Text -match $emailPattern) {
-        return $Matches[0]
+    # Nettoyer les caractères invisibles
+    $Text = $Text -replace '[\p{Cf}\u00A0\u2800\u180E\u205F\u202F]', ' '
+    $Text = $Text -replace '<\s+', '<'
+    $Text = $Text -replace '\s+>', '>'
+    # Priorité 1 : format "Nom Affiché <email@domain>" → extraire ce qui est entre < >
+    if ($Text -match '<([^@\s>]+@[^\s>]+)>') {
+        return $Matches[1].Trim()
     }
+
+    # Priorité 2 : adresse email nue
+    if ($Text -match '([^@\s<>,;]+@[^\s<>,;]+\.[^\s<>,;]+)') {
+        return $Matches[1].Trim()
+    }
+
     return $null
 }
 
 # ─── Fonction pour extraire le domaine d'une adresse email ─────────────────
 function Extract-Domain {
     param([string]$Email)
-
-    # Extraire la partie après le @
-    if ($Email -match "@(.+)$") {
-        $domainPart = $Matches[1]
-
-        # Appliquer la regex complète pour valider et extraire le domaine
-        $domainPattern = "((?=[a-z0-9-]{1,63}\.)(xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}"
-        if ($domainPart -match $domainPattern) {
-            return $Matches[0]
+    # Extraire simplement tout ce qui est après le @
+    if ($Email -match '@([^\s>]+)$') {
+        $domainPart = $Matches[1].Trim().TrimEnd('>')
+        # Valider que c'est un domaine ou sous-domaine basique
+        if ($domainPart -match '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$') {
+            return $domainPart.ToLower()
         }
+        # Fallback : retourner quand même la partie après @ même sans TLD classique
+        return $domainPart.ToLower()
     }
     return $null
 }
@@ -115,7 +123,8 @@ function Extract-AuthDomain {
 # ─── Fonction pour décoder les headers MIME encoded-word (RFC 2047) ─────────
 function Decode-MimeHeader {
     param([string]$EncodedText)
-    
+
+    $EncodedText = $EncodedText -replace '(\?=)\s*(=\?)', '$1$2'
     if ([string]::IsNullOrWhiteSpace($EncodedText)) {
         return $EncodedText
     }
